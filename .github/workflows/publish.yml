@@ -1,0 +1,82 @@
+name: 발행 — jjam-classroom 에서 받아 배포
+
+# 이 사이트의 소스는 shway81-droid/jjam-classroom 의 `1min/` 폴더다.
+# 이 저장소에는 소스를 두지 않는다 — 두 곳에 두면 갈라지기 때문이다.
+# 주소(github.io/jjam-1min/)가 저장소 이름에서 나오기 때문에 발행만 여기 남겨 두었다.
+#
+# 언제 도는가
+#   - 상류에서 `1min/` 이 머지되면 곧바로 (repository_dispatch)
+#   - 하루 한 번(KST 04:30경) 안전망 — 상류가 그대로면 몇 초 만에 건너뛴다
+#   - 즉시 반영하려면 Actions 탭에서 "Run workflow"
+#
+# 자매 저장소들과 크론 분을 어긋냈다 (jjam-video 는 UTC 19:20).
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish.yml']
+  schedule:
+    - cron: '30 19 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [classroom-published]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 상류(jjam-classroom) 받기
+        uses: actions/checkout@v4
+        with:
+          repository: shway81-droid/jjam-classroom
+          ref: main
+          path: src
+
+      - name: 사이트 폴더를 꺼내고 서비스워커 캐시 이름을 상류 커밋으로 갱신
+        id: build
+        run: |
+          SHA=$(git -C src rev-parse --short HEAD)
+          rm -rf site && mkdir site
+          cp -a src/1min/. site/
+          touch site/.nojekyll
+          sed -i "s|const CACHE_NAME = '[^']*';|const CACHE_NAME = 'jjam1min-${SHA}';|" site/sw.js
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "상류 $SHA 로 빌드함"
+
+      - name: 이미 같은 것이 올라가 있으면 건너뛴다
+        id: gate
+        run: |
+          LIVE=$(curl -sf --max-time 20 https://shway81-droid.github.io/jjam-1min/sw.js || true)
+          if printf '%s' "$LIVE" | grep -qF "${{ steps.build.outputs.sha }}"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "이미 상류 ${{ steps.build.outputs.sha }} 가 올라가 있다 — 건너뛴다"
+          fi
+
+      - name: Configure Pages
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload site
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/deploy-pages@v4
