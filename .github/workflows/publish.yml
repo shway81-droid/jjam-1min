@@ -26,9 +26,11 @@ permissions:
   pages: write
   id-token: write
 
+# 발행은 중간에 끊기면 안 되므로 취소하지 않고 줄을 세운다.
+# (상류 신호와 크론이 겹칠 때 진행 중인 배포가 취소되는 것을 막는다)
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -52,6 +54,14 @@ jobs:
           cp -a src/1min/. site/
           touch site/.nojekyll
           sed -i "s|const CACHE_NAME = '[^']*';|const CACHE_NAME = 'jjam1min-${SHA}';|" site/sw.js
+          # sed 는 패턴을 못 찾아도 오류 없이 끝난다. 상류 sw.js 의 따옴표나 공백이
+          # 바뀌면 치환이 조용히 건너뛰어지고, 그러면 캐시 이름이 고정돼 캐시
+          # 무효화가 사라지고 아래 게이트도 영영 매치되지 않아 매일 헛 배포가 돈다.
+          # 그래서 치환 결과를 눈으로 확인한다.
+          grep -qF "const CACHE_NAME = 'jjam1min-${SHA}';" site/sw.js || {
+            echo "::error::sw.js 의 CACHE_NAME 치환에 실패했다 — 상류 sw.js 의 형식이 바뀌었는지 확인해야 한다."
+            exit 1
+          }
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "상류 $SHA 로 빌드함"
 
